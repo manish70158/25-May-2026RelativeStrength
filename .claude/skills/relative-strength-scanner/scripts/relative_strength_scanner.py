@@ -298,23 +298,51 @@ def send_telegram_alert(message: str, bot_token: str, chat_id: str) -> bool:
         return False
 
 
-def format_telegram_message(new_outperformers: list[dict], scan_date: str) -> str:
-    """Format the alert message for Telegram."""
-    msg = f"<b>New RS Outperformers</b> ({scan_date})\n"
-    msg += f"<i>Stocks newly beating Nifty with rising momentum</i>\n\n"
+def format_telegram_message(
+    new_outperformers: list[dict],
+    lost_outperformers: list[str],
+    scan_date: str
+) -> str:
+    """Format the alert message for Telegram with both new and dropped stocks."""
+    msg = f"<b>📊 RS Scanner Update</b> ({scan_date})\n"
+    msg += "=" * 40 + "\n\n"
 
-    for i, stock in enumerate(new_outperformers[:30], 1):
-        rs_pct = stock["rs_value"] * 100
-        msg += (
-            f"{i}. <b>{stock['symbol']}</b> "
-            f"| RS: {rs_pct:+.1f}% "
-            f"| {stock['close']}\n"
-        )
+    # New outperformers section
+    if new_outperformers:
+        msg += f"<b>✅ NEW OUTPERFORMERS ({len(new_outperformers)})</b>\n"
+        msg += f"<i>Stocks newly beating Nifty in BOTH periods</i>\n\n"
 
-    if len(new_outperformers) > 30:
-        msg += f"\n... and {len(new_outperformers) - 30} more"
+        for i, stock in enumerate(new_outperformers[:15], 1):
+            rs_101_pct = stock["rs_value_101"] * 100
+            rs_123_pct = stock["rs_value_123"] * 100
+            msg += (
+                f"{i}. <b>{stock['symbol']}</b> "
+                f"| 101d: {rs_101_pct:+.1f}% "
+                f"| 123d: {rs_123_pct:+.1f}%\n"
+            )
 
-    msg += f"\n\n<i>Total new outperformers: {len(new_outperformers)}</i>"
+        if len(new_outperformers) > 15:
+            msg += f"<i>... and {len(new_outperformers) - 15} more</i>\n"
+    else:
+        msg += "<b>✅ NEW OUTPERFORMERS</b>\n"
+        msg += "<i>None</i>\n"
+
+    msg += "\n" + "-" * 40 + "\n\n"
+
+    # Dropped outperformers section
+    if lost_outperformers:
+        msg += f"<b>⚠️ DROPPED FROM OUTPERFORM ({len(lost_outperformers)})</b>\n"
+        msg += f"<i>No longer beating Nifty in both periods</i>\n\n"
+
+        for i, symbol in enumerate(lost_outperformers[:15], 1):
+            msg += f"{i}. {symbol}\n"
+
+        if len(lost_outperformers) > 15:
+            msg += f"<i>... and {len(lost_outperformers) - 15} more</i>\n"
+    else:
+        msg += "<b>⚠️ DROPPED FROM OUTPERFORM</b>\n"
+        msg += "<i>None</i>\n"
+
     return msg
 
 
@@ -340,40 +368,49 @@ def check_and_alert(results: list[dict], bot_token: str = None, chat_id: str = N
         print("\n  First scan — saved baseline. Alerts will fire from next scan onwards.")
         return
 
-    if not new_symbols:
-        print("\n  No new outperformers since last scan.")
-        return
-
     # Get full details for new outperformers
     new_outperformers = [r for r in current_outperformers if r["symbol"] in new_symbols]
-    new_outperformers.sort(key=lambda x: x["rs_value"], reverse=True)
+    new_outperformers.sort(key=lambda x: x["rs_avg"], reverse=True)
+
+    # Also get stocks that dropped out of outperform
+    lost_symbols = previous_symbols - current_symbols
 
     scan_date = results[0]["scan_date"] if results else datetime.now().strftime("%Y-%m-%d")
 
-    print(f"\n  NEW OUTPERFORMERS: {len(new_outperformers)} stocks")
-    print(f"  {'-'*50}")
-    for s in new_outperformers[:10]:
-        print(f"    {s['symbol']:<12} RS: {s['rs_value']:+.4f}  Close: {s['close']}")
-    if len(new_outperformers) > 10:
-        print(f"    ... and {len(new_outperformers) - 10} more")
+    # Console output
+    if new_outperformers:
+        print(f"\n  NEW OUTPERFORMERS: {len(new_outperformers)} stocks")
+        print(f"  {'-'*50}")
+        for s in new_outperformers[:10]:
+            print(f"    {s['symbol']:<12} RS-101: {s['rs_value_101']:+.4f}  RS-123: {s['rs_value_123']:+.4f}  Close: {s['close']}")
+        if len(new_outperformers) > 10:
+            print(f"    ... and {len(new_outperformers) - 10} more")
+    else:
+        print("\n  No new outperformers since last scan.")
 
-    # Also show stocks that dropped out of outperform
-    lost_symbols = previous_symbols - current_symbols
     if lost_symbols:
         print(f"\n  DROPPED FROM OUTPERFORM: {len(lost_symbols)} stocks")
         for sym in list(lost_symbols)[:5]:
             print(f"    {sym}")
         if len(lost_symbols) > 5:
             print(f"    ... and {len(lost_symbols) - 5} more")
+    else:
+        print("\n  No stocks dropped from outperform.")
 
-    # Send Telegram alert
+    # If no changes at all, don't send alert
+    if not new_symbols and not lost_symbols:
+        print("\n  No changes since last scan — skipping alert.")
+        return
+
+    # Send Telegram alert (always send if there are changes OR if it's the first scan after baseline)
     if not bot_token or not chat_id:
         config = load_config()
         bot_token = bot_token or config.get("telegram_bot_token")
         chat_id = chat_id or config.get("telegram_chat_id")
 
     if bot_token and chat_id:
-        message = format_telegram_message(new_outperformers, scan_date)
+        # Send alert if there are new outperformers, dropped stocks, or neither (just status update)
+        message = format_telegram_message(new_outperformers, list(lost_symbols), scan_date)
         print(f"\n  Sending Telegram alert...")
         if send_telegram_alert(message, bot_token, chat_id):
             print("  Telegram alert sent!")

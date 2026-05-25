@@ -1,0 +1,53 @@
+name: Daily Relative Strength Scan
+
+on:
+  schedule:
+    # Run at 11:00 AM UTC (4:30 PM IST) on weekdays
+    - cron: '30 11 * * 1-5'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        pip install -r .claude/skills/relative-strength-scanner/scripts/requirements.txt
+
+    - name: Run RS Scanner with Telegram alerts
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: |
+        cd .claude/skills/relative-strength-scanner/scripts
+        python relative_strength_scanner.py \
+          --alert \
+          --bot-token "$TELEGRAM_BOT_TOKEN" \
+          --chat-id "$TELEGRAM_CHAT_ID" \
+          --output "../../../scans/rs_$(date +%Y%m%d).csv"
+
+    - name: Upload scan results as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: rs-scan-${{ github.run_number }}
+        path: scans/rs_*.csv
+        retention-days: 30
+
+    - name: Commit and push results (optional)
+      continue-on-error: true
+      run: |
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git add scans/
+        git diff --staged --quiet || git commit -m "Add RS scan results for $(date +%Y-%m-%d)"
+        git push
