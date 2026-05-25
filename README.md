@@ -2,8 +2,9 @@
 
 A comprehensive Nifty 500 stock scanner that identifies stocks outperforming the Nifty index across **two timeframes simultaneously** (101 days and 123 days) with automated daily scans and Telegram notifications.
 
-## Features
+## Tools in This Repository
 
+### 1. Relative Strength Scanner (`rs_scanner`)
 - **Dual-Period Filtering**: Scans for relative strength across both 101-day and 123-day periods
 - **Strict Confirmation**: Only flags stocks as OUTPERFORM if they beat Nifty in BOTH periods
 - **Automated Daily Scans**: GitHub Actions runs the scanner every weekday after market close
@@ -11,6 +12,20 @@ A comprehensive Nifty 500 stock scanner that identifies stocks outperforming the
   - 📈 New stocks entering the OUTPERFORM category
   - 📉 Stocks dropping from OUTPERFORM (potential weakness)
 - **Historical Tracking**: CSV results saved as GitHub artifacts (30-day retention)
+
+### 2. Stock Peak & Low Analyzer (`stock_peak_analysis.py`) 🆕
+- **Peak/Low Detection**: Identifies significant price peaks and lows based on percentage thresholds
+- **Reason Analysis**: Finds reasons for each movement:
+  - Market correlation with Nifty
+  - News from screener.in
+  - Quarterly results timing
+  - Corporate actions (dividends, splits)
+- **CSV Reports**: Generates detailed analysis reports
+- **Customizable**: Adjustable thresholds and time periods
+
+📖 **[View Peak Analysis Documentation](PEAK_ANALYSIS_README.md)**
+
+## Features
 
 ## Signal Logic
 
