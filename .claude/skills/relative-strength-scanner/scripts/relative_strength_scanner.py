@@ -26,26 +26,60 @@ HISTORY_FILE = Path(__file__).parent / "previous_outperformers.json"
 CONFIG_FILE = Path(__file__).parent / "config.json"
 CACHE_MAX_AGE_DAYS = 7
 DEFAULT_BENCHMARK = "^NSEI"
-DEFAULT_PERIOD_1 = 101
+DEFAULT_PERIOD_1 = 103
 DEFAULT_PERIOD_2 = 123
 DEFAULT_MA_PERIOD = 10
 DEFAULT_TOP = 20
 DEFAULT_OUTPUT = "rs_scan_results.csv"
 
 
-def fetch_nifty500_symbols() -> list[dict]:
-    """Fetch Nifty 500 constituent list from NSE India."""
+def fetch_nifty500_symbols(index_name: str = "nifty500") -> list[dict]:
+    """Fetch Nifty constituent list from NSE India.
+
+    Args:
+        index_name: One of "nifty50", "nifty100", "nifty200", "nifty500"
+    """
+    # Map index names to cache files and URLs
+    index_config = {
+        "nifty50": {
+            "cache": Path(__file__).parent / "nifty50_symbols.json",
+            "url": "https://www.niftyindices.com/IndexConstituent/ind_nifty50list.csv",
+            "name": "Nifty 50"
+        },
+        "nifty100": {
+            "cache": Path(__file__).parent / "nifty100_symbols.json",
+            "url": "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv",
+            "name": "Nifty 100"
+        },
+        "nifty200": {
+            "cache": Path(__file__).parent / "nifty200_symbols.json",
+            "url": "https://www.niftyindices.com/IndexConstituent/ind_nifty200list.csv",
+            "name": "Nifty 200"
+        },
+        "nifty500": {
+            "cache": NIFTY500_CACHE_FILE,
+            "url": "https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv",
+            "name": "Nifty 500"
+        }
+    }
+
+    if index_name not in index_config:
+        print(f"ERROR: Unknown index '{index_name}'. Use one of: {', '.join(index_config.keys())}")
+        sys.exit(1)
+
+    config = index_config[index_name]
+    cache_file = config["cache"]
+    url = config["url"]
+    display_name = config["name"]
 
     # Check cache first
-    if NIFTY500_CACHE_FILE.exists():
-        cache_age = time.time() - NIFTY500_CACHE_FILE.stat().st_mtime
+    if cache_file.exists():
+        cache_age = time.time() - cache_file.stat().st_mtime
         if cache_age < CACHE_MAX_AGE_DAYS * 86400:
-            with open(NIFTY500_CACHE_FILE) as f:
+            with open(cache_file) as f:
                 return json.load(f)
 
-    print("Fetching Nifty 500 stock list from NSE...")
-
-    url = "https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv"
+    print(f"Fetching {display_name} stock list from NSE...")
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
         "Accept": "text/csv,application/csv,text/plain,*/*",
@@ -71,7 +105,7 @@ def fetch_nifty500_symbols() -> list[dict]:
                 })
 
         if symbols:
-            with open(NIFTY500_CACHE_FILE, "w") as f:
+            with open(cache_file, "w") as f:
                 json.dump(symbols, f, indent=2)
             print(f"Cached {len(symbols)} symbols.")
             return symbols
@@ -80,7 +114,7 @@ def fetch_nifty500_symbols() -> list[dict]:
         print(f"Warning: Could not fetch from NSE ({e}). Trying alternate source...")
 
     # Fallback: try to load from a local file if provided
-    local_file = Path(__file__).parent / "nifty500_manual.csv"
+    local_file = Path(__file__).parent / f"{index_name}_manual.csv"
     if local_file.exists():
         df = pd.read_csv(local_file)
         symbols = []
@@ -95,19 +129,25 @@ def fetch_nifty500_symbols() -> list[dict]:
         return symbols
 
     # If cache exists but is stale, use it anyway
-    if NIFTY500_CACHE_FILE.exists():
+    if cache_file.exists():
         print("Using stale cache as fallback.")
-        with open(NIFTY500_CACHE_FILE) as f:
+        with open(cache_file) as f:
             return json.load(f)
 
-    print("ERROR: Cannot get Nifty 500 list. Please provide nifty500_manual.csv")
+    print(f"ERROR: Cannot get {display_name} list. Please provide {index_name}_manual.csv")
     sys.exit(1)
 
 
-def download_price_data(symbols: list[str], max_period_days: int, ma_period: int) -> dict[str, pd.Series]:
+def download_price_data(symbols: list[str], max_period_days: int, ma_period: int, benchmark: str = None) -> dict[str, pd.Series]:
     """
     Download closing prices for all symbols.
     We need max_period + ma_period + buffer days of data.
+
+    Args:
+        symbols: List of stock symbols to download
+        max_period_days: Maximum lookback period
+        ma_period: Moving average period
+        benchmark: Optional benchmark symbol to download separately
     """
     # Need extra days for MA calculation and weekends/holidays
     total_days_needed = (max_period_days + ma_period + 10) * 2  # 2x buffer for non-trading days
@@ -156,6 +196,23 @@ def download_price_data(symbols: list[str], max_period_days: int, ma_period: int
         done = min(i + batch_size, len(symbols))
         print(f"  Downloaded {done}/{len(symbols)} symbols...", end="\r")
 
+    # Download benchmark separately if provided
+    if benchmark and benchmark not in all_data:
+        print(f"\n  Downloading benchmark {benchmark} separately...")
+        try:
+            bench_data = yf.download(
+                benchmark,
+                start=start_date,
+                end=end_date,
+                progress=False,
+                auto_adjust=True
+            )
+            if "Close" in bench_data.columns and not bench_data["Close"].empty:
+                all_data[benchmark] = bench_data["Close"].dropna()
+                print(f"  Benchmark downloaded: {len(all_data[benchmark])} days")
+        except Exception as e:
+            print(f"  Warning: Could not download benchmark: {e}")
+
     print(f"\n  Successfully got data for {len(all_data)} symbols.")
     return all_data
 
@@ -185,6 +242,12 @@ def calculate_relative_strength(
     for i in range(period, len(stock)):
         stock_return = stock.iloc[i] / stock.iloc[i - period]
         bench_return = bench.iloc[i] / bench.iloc[i - period]
+
+        # Convert to float if it's a Series/array
+        if hasattr(stock_return, 'item'):
+            stock_return = stock_return.item() if hasattr(stock_return, 'item') else float(stock_return)
+        if hasattr(bench_return, 'item'):
+            bench_return = bench_return.item() if hasattr(bench_return, 'item') else float(bench_return)
 
         if bench_return == 0:
             continue
@@ -243,6 +306,28 @@ def determine_signal(
         combined_trend = "MIXED"
 
     return signal, combined_trend, f"{trend_101}/{trend_123}"
+
+
+def determine_signal_single(
+    rs_value: float,
+    rs_ma: float
+) -> tuple[str, str]:
+    """
+    Determine signal and trend for single-period mode.
+    Matches TradingView indicator behavior.
+    """
+    # Signal logic: RS > 0 and RS > RS_MA
+    if rs_value > 0 and rs_value > rs_ma:
+        signal = "OUTPERFORM"
+    elif rs_value > 0:
+        signal = "NEUTRAL"
+    else:
+        signal = "UNDERPERFORM"
+
+    # Trend
+    trend = "UP" if rs_value > rs_ma else "DOWN"
+
+    return signal, trend
 
 
 def load_config() -> dict:
@@ -470,29 +555,58 @@ def run_scan(
     alert: bool = False,
     bot_token: str = None,
     chat_id: str = None,
+    index: str = "nifty500",
+    single_period: int = None,
 ):
-    """Run the full relative strength scan with dual periods (101 and 123 days)."""
+    """Run the full relative strength scan with single or dual periods.
+
+    Args:
+        single_period: If provided, uses single-period mode (matches TradingView)
+        period_1, period_2: Used for dual-period mode if single_period is None
+    """
+
+    index_display_names = {
+        "nifty50": "Nifty 50",
+        "nifty100": "Nifty 100",
+        "nifty200": "Nifty 200",
+        "nifty500": "Nifty 500"
+    }
+    index_display = index_display_names.get(index, index.upper())
+
+    # Determine mode
+    is_single_mode = single_period is not None
 
     print("=" * 80)
-    print("  RELATIVE STRENGTH SCANNER — Nifty 500 vs Nifty Index (Dual Period)")
-    print("=" * 80)
-    print(f"  Period 1: {period_1} days | Period 2: {period_2} days | MA: {ma_period} days")
-    print(f"  Benchmark: {benchmark}")
-    print(f"  Filter: Stock must outperform in BOTH periods")
+    if is_single_mode:
+        print(f"  RELATIVE STRENGTH SCANNER — {index_display} vs Nifty Index (Single Period)")
+        print("=" * 80)
+        print(f"  Period: {single_period} days | MA: {ma_period} days")
+        print(f"  Benchmark: {benchmark}")
+        print(f"  Filter: RS > 0 and RS > RS_MA")
+    else:
+        print(f"  RELATIVE STRENGTH SCANNER — {index_display} vs Nifty Index (Dual Period)")
+        print("=" * 80)
+        print(f"  Period 1: {period_1} days | Period 2: {period_2} days | MA: {ma_period} days")
+        print(f"  Benchmark: {benchmark}")
+        print(f"  Filter: Stock must outperform in BOTH periods")
+
     print(f"  Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print("=" * 80)
     print()
 
-    # Step 1: Get Nifty 500 symbols
-    stocks = fetch_nifty500_symbols()
+    # Step 1: Get stock symbols
+    stocks = fetch_nifty500_symbols(index)
     yf_symbols = [s["yf_symbol"] for s in stocks]
     symbol_map = {s["yf_symbol"]: s for s in stocks}
 
-    # Step 2: Download all price data (including benchmark)
+    # Step 2: Download all price data (stocks only, benchmark downloaded separately)
     # Use the larger period to ensure we have enough data
-    max_period = max(period_1, period_2)
-    all_symbols = yf_symbols + [benchmark]
-    price_data = download_price_data(all_symbols, max_period, ma_period)
+    if is_single_mode:
+        max_period = single_period
+    else:
+        max_period = max(period_1, period_2)
+
+    price_data = download_price_data(yf_symbols, max_period, ma_period, benchmark=benchmark)
 
     # Check benchmark data
     if benchmark not in price_data:
@@ -501,103 +615,160 @@ def run_scan(
 
     benchmark_prices = price_data[benchmark]
 
-    # Step 3: Calculate RS for each stock (both periods)
-    print("\nCalculating relative strength for both periods...")
+    # Step 3: Calculate RS for each stock
+    if is_single_mode:
+        print(f"\nCalculating relative strength for {single_period} days...")
+    else:
+        print("\nCalculating relative strength for both periods...")
+
     results = []
 
     for yf_sym in yf_symbols:
         if yf_sym not in price_data:
             continue
 
-        # Calculate RS for 101-day period
-        rs_data_101 = calculate_relative_strength(
-            price_data[yf_sym],
-            benchmark_prices,
-            period_1,
-            ma_period
-        )
-
-        # Calculate RS for 123-day period
-        rs_data_123 = calculate_relative_strength(
-            price_data[yf_sym],
-            benchmark_prices,
-            period_2,
-            ma_period
-        )
-
-        # Skip if either calculation failed
-        if rs_data_101 is None or rs_data_123 is None:
-            continue
-
         stock_info = symbol_map[yf_sym]
 
-        # Determine signal based on BOTH periods
-        signal, combined_trend, detailed_trend = determine_signal(
-            rs_data_101["rs_value"],
-            rs_data_101["rs_ma"],
-            rs_data_123["rs_value"],
-            rs_data_123["rs_ma"]
-        )
+        if is_single_mode:
+            # Single-period mode (matches TradingView)
+            rs_data = calculate_relative_strength(
+                price_data[yf_sym],
+                benchmark_prices,
+                single_period,
+                ma_period
+            )
 
-        results.append({
-            "symbol": stock_info["symbol"],
-            "name": stock_info["name"],
-            "close": rs_data_101["close"],
-            "rs_value_101": rs_data_101["rs_value"],
-            "rs_ma_101": rs_data_101["rs_ma"],
-            "rs_value_123": rs_data_123["rs_value"],
-            "rs_ma_123": rs_data_123["rs_ma"],
-            "signal": signal,
-            "rs_trend": combined_trend,
-            "trend_detail": detailed_trend,
-            "scan_date": rs_data_101["scan_date"]
-        })
+            if rs_data is None:
+                continue
+
+            signal, trend = determine_signal_single(
+                rs_data["rs_value"],
+                rs_data["rs_ma"]
+            )
+
+            results.append({
+                "symbol": stock_info["symbol"],
+                "name": stock_info["name"],
+                "close": rs_data["close"],
+                "rs_value": rs_data["rs_value"],
+                "rs_ma": rs_data["rs_ma"],
+                "signal": signal,
+                "rs_trend": trend,
+                "scan_date": rs_data["scan_date"]
+            })
+
+        else:
+            # Dual-period mode
+            rs_data_101 = calculate_relative_strength(
+                price_data[yf_sym],
+                benchmark_prices,
+                period_1,
+                ma_period
+            )
+
+            rs_data_123 = calculate_relative_strength(
+                price_data[yf_sym],
+                benchmark_prices,
+                period_2,
+                ma_period
+            )
+
+            if rs_data_101 is None or rs_data_123 is None:
+                continue
+
+            signal, combined_trend, detailed_trend = determine_signal(
+                rs_data_101["rs_value"],
+                rs_data_101["rs_ma"],
+                rs_data_123["rs_value"],
+                rs_data_123["rs_ma"]
+            )
+
+            results.append({
+                "symbol": stock_info["symbol"],
+                "name": stock_info["name"],
+                "close": rs_data_101["close"],
+                "rs_value_101": rs_data_101["rs_value"],
+                "rs_ma_101": rs_data_101["rs_ma"],
+                "rs_value_123": rs_data_123["rs_value"],
+                "rs_ma_123": rs_data_123["rs_ma"],
+                "signal": signal,
+                "rs_trend": combined_trend,
+                "trend_detail": detailed_trend,
+                "scan_date": rs_data_101["scan_date"]
+            })
 
     if not results:
         print("ERROR: No results calculated. Check data availability.")
         sys.exit(1)
 
-    # Step 4: Sort by average RS value (descending)
-    # Average of both periods for ranking
-    for r in results:
-        r["rs_avg"] = (r["rs_value_101"] + r["rs_value_123"]) / 2
-
-    results.sort(key=lambda x: x["rs_avg"], reverse=True)
+    # Step 4: Sort by RS value (descending)
+    if is_single_mode:
+        results.sort(key=lambda x: x["rs_value"], reverse=True)
+    else:
+        # Average of both periods for ranking
+        for r in results:
+            r["rs_avg"] = (r["rs_value_101"] + r["rs_value_123"]) / 2
+        results.sort(key=lambda x: x["rs_avg"], reverse=True)
 
     # Step 5: Filter and display
     if not show_all and min_rs > 0:
-        results = [r for r in results if r["rs_value_101"] >= min_rs and r["rs_value_123"] >= min_rs]
+        if is_single_mode:
+            results = [r for r in results if r["rs_value"] >= min_rs]
+        else:
+            results = [r for r in results if r["rs_value_101"] >= min_rs and r["rs_value_123"] >= min_rs]
 
     display_results = results[:top] if not show_all else results
 
     # Console output
-    print(f"\n{'='*120}")
-    print(f"  TOP {len(display_results)} STOCKS BY RELATIVE STRENGTH (Both Periods)")
-    print(f"{'='*120}")
-    print(f"{'Rank':<5} {'Symbol':<12} {'Close':>8} {'RS-101':>9} {'MA-101':>9} {'RS-123':>9} {'MA-123':>9} {'Signal':<13} {'Trend':<8}")
-    print(f"{'-'*120}")
+    if is_single_mode:
+        print(f"\n{'='*90}")
+        print(f"  TOP {len(display_results)} STOCKS BY RELATIVE STRENGTH ({single_period}-day)")
+        print(f"{'='*90}")
+        print(f"{'Rank':<5} {'Symbol':<15} {'Close':>10} {'RS':>12} {'RS_MA':>12} {'Signal':<13} {'Trend':<8}")
+        print(f"{'-'*90}")
 
-    for i, r in enumerate(display_results, 1):
-        print(
-            f"{i:<5} {r['symbol']:<12} {r['close']:>8.2f} "
-            f"{r['rs_value_101']:>9.4f} {r['rs_ma_101']:>9.4f} "
-            f"{r['rs_value_123']:>9.4f} {r['rs_ma_123']:>9.4f} "
-            f"{r['signal']:<13} {r['trend_detail']:<8}"
-        )
+        for i, r in enumerate(display_results, 1):
+            print(
+                f"{i:<5} {r['symbol']:<15} {r['close']:>10.2f} "
+                f"{r['rs_value']:>12.4f} {r['rs_ma']:>12.4f} "
+                f"{r['signal']:<13} {r['rs_trend']:<8}"
+            )
+    else:
+        print(f"\n{'='*120}")
+        print(f"  TOP {len(display_results)} STOCKS BY RELATIVE STRENGTH (Both Periods)")
+        print(f"{'='*120}")
+        print(f"{'Rank':<5} {'Symbol':<12} {'Close':>8} {'RS-101':>9} {'MA-101':>9} {'RS-123':>9} {'MA-123':>9} {'Signal':<13} {'Trend':<8}")
+        print(f"{'-'*120}")
+
+        for i, r in enumerate(display_results, 1):
+            print(
+                f"{i:<5} {r['symbol']:<12} {r['close']:>8.2f} "
+                f"{r['rs_value_101']:>9.4f} {r['rs_ma_101']:>9.4f} "
+                f"{r['rs_value_123']:>9.4f} {r['rs_ma_123']:>9.4f} "
+                f"{r['signal']:<13} {r['trend_detail']:<8}"
+            )
 
     # Summary stats
     outperformers = [r for r in results if r["signal"] == "OUTPERFORM"]
     neutral = [r for r in results if r["signal"] == "NEUTRAL"]
     underperformers = [r for r in results if r["signal"] == "UNDERPERFORM"]
 
-    print(f"\n{'='*120}")
+    separator_width = 90 if is_single_mode else 120
+    print(f"\n{'='*separator_width}")
     print(f"  SUMMARY")
-    print(f"{'='*120}")
+    print(f"{'='*separator_width}")
     print(f"  Total stocks scanned: {len(results)}")
-    print(f"  OUTPERFORM (RS>0 & RS>MA in BOTH periods): {len(outperformers)}")
-    print(f"  NEUTRAL (RS>0 in both but not outperforming): {len(neutral)}")
-    print(f"  UNDERPERFORM (RS<0 in either period):       {len(underperformers)}")
-    print(f"{'='*120}")
+
+    if is_single_mode:
+        print(f"  OUTPERFORM (RS>0 & RS>MA): {len(outperformers)}")
+        print(f"  NEUTRAL (RS>0 but RS<MA): {len(neutral)}")
+        print(f"  UNDERPERFORM (RS<0):       {len(underperformers)}")
+    else:
+        print(f"  OUTPERFORM (RS>0 & RS>MA in BOTH periods): {len(outperformers)}")
+        print(f"  NEUTRAL (RS>0 in both but not outperforming): {len(neutral)}")
+        print(f"  UNDERPERFORM (RS<0 in either period):       {len(underperformers)}")
+
+    print(f"{'='*separator_width}")
 
     # Step 6: Save to CSV
     df = pd.DataFrame(results)
@@ -632,12 +803,22 @@ def setup_cron():
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Dual-Period Relative Strength Scanner for Nifty 500 stocks vs Nifty Index"
+        description="Relative Strength Scanner for Nifty stocks vs Nifty Index (Single or Dual Period Mode)"
     )
+    parser.add_argument("--index", type=str, default="nifty500",
+                        choices=["nifty50", "nifty100", "nifty200", "nifty500"],
+                        help="Which Nifty index to scan (default: nifty500)")
+
+    # Single-period mode (TradingView style)
+    parser.add_argument("--period", type=int, default=None,
+                        help="Single lookback period (e.g., 123 for TradingView mode). Overrides dual-period mode.")
+
+    # Dual-period mode (default)
     parser.add_argument("--period-1", type=int, default=DEFAULT_PERIOD_1,
-                        help=f"First lookback period in trading days (default: {DEFAULT_PERIOD_1})")
+                        help=f"First lookback period in trading days for dual-period mode (default: {DEFAULT_PERIOD_1})")
     parser.add_argument("--period-2", type=int, default=DEFAULT_PERIOD_2,
-                        help=f"Second lookback period in trading days (default: {DEFAULT_PERIOD_2})")
+                        help=f"Second lookback period in trading days for dual-period mode (default: {DEFAULT_PERIOD_2})")
+
     parser.add_argument("--ma-period", type=int, default=DEFAULT_MA_PERIOD,
                         help=f"Moving average period for RS (default: {DEFAULT_MA_PERIOD})")
     parser.add_argument("--top", type=int, default=DEFAULT_TOP,
@@ -685,6 +866,8 @@ def main():
         alert=args.alert,
         bot_token=args.bot_token,
         chat_id=args.chat_id,
+        index=args.index,
+        single_period=args.period,
     )
 
 
