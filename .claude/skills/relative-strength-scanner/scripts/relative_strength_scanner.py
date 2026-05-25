@@ -143,7 +143,7 @@ def download_price_data(symbols: list[str], max_period_days: int, ma_period: int
                     else:
                         close = data[sym]["Close"]
 
-                    if close is not None and not close.empty and close.dropna().shape[0] > period_days:
+                    if close is not None and not close.empty and close.dropna().shape[0] > max_period_days:
                         all_data[sym] = close.dropna()
                 except (KeyError, TypeError):
                     continue
