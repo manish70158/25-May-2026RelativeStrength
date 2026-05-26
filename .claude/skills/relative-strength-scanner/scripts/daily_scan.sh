@@ -19,6 +19,7 @@ echo "Scanning Nifty 50..."
     --index nifty50 \
     --period-1 103 \
     --period-2 123 \
+    --alert \
     --output "$OUTPUT_DIR/rs_nifty50.csv"
 
 echo ""
@@ -27,6 +28,7 @@ echo "Scanning Nifty 100..."
     --index nifty100 \
     --period-1 103 \
     --period-2 123 \
+    --alert \
     --output "$OUTPUT_DIR/rs_nifty100.csv"
 
 echo ""
@@ -35,6 +37,7 @@ echo "Scanning Nifty 200..."
     --index nifty200 \
     --period-1 103 \
     --period-2 123 \
+    --alert \
     --output "$OUTPUT_DIR/rs_nifty200.csv"
 
 echo ""
@@ -43,6 +46,7 @@ echo "Scanning Nifty 500..."
     --index nifty500 \
     --period-1 103 \
     --period-2 123 \
+    --alert \
     --output "$OUTPUT_DIR/rs_nifty500.csv"
 
 echo ""

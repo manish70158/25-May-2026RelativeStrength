@@ -1,0 +1,104 @@
+name: Daily Relative Strength Scan
+
+on:
+  schedule:
+    # Run at 4:30 PM IST (11:00 AM UTC) on weekdays
+    - cron: '0 11 * * 1-5'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas yfinance requests beautifulsoup4 lxml numpy
+
+      - name: Run daily scan
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          cd .claude/skills/relative-strength-scanner
+
+          # Create output directory with date
+          DATE_SUFFIX=$(date +%Y%m%d)
+          OUTPUT_DIR="scans/$DATE_SUFFIX"
+          mkdir -p "$OUTPUT_DIR"
+
+          echo "=========================================="
+          echo "Daily RS Scan - $(date '+%Y-%m-%d %H:%M')"
+          echo "=========================================="
+
+          # Run scans for all indices with Telegram alerts if configured
+          ALERT_FLAG=""
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            ALERT_FLAG="--alert --bot-token $TELEGRAM_BOT_TOKEN --chat-id $TELEGRAM_CHAT_ID"
+          fi
+
+          echo ""
+          echo "Scanning Nifty 50..."
+          python3 scripts/relative_strength_scanner.py \
+              --index nifty50 \
+              --period-1 103 \
+              --period-2 123 \
+              $ALERT_FLAG \
+              --output "$OUTPUT_DIR/rs_nifty50.csv"
+
+          echo ""
+          echo "Scanning Nifty 100..."
+          python3 scripts/relative_strength_scanner.py \
+              --index nifty100 \
+              --period-1 103 \
+              --period-2 123 \
+              $ALERT_FLAG \
+              --output "$OUTPUT_DIR/rs_nifty100.csv"
+
+          echo ""
+          echo "Scanning Nifty 200..."
+          python3 scripts/relative_strength_scanner.py \
+              --index nifty200 \
+              --period-1 103 \
+              --period-2 123 \
+              $ALERT_FLAG \
+              --output "$OUTPUT_DIR/rs_nifty200.csv"
+
+          echo ""
+          echo "Scanning Nifty 500..."
+          python3 scripts/relative_strength_scanner.py \
+              --index nifty500 \
+              --period-1 103 \
+              --period-2 123 \
+              $ALERT_FLAG \
+              --output "$OUTPUT_DIR/rs_nifty500.csv"
+
+          echo ""
+          echo "=========================================="
+          echo "All scans complete!"
+          echo "Results saved to: $OUTPUT_DIR"
+          echo "=========================================="
+
+      - name: Commit and push results
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+          cd .claude/skills/relative-strength-scanner
+          git add scans/
+
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Daily RS scan results - $(date '+%Y-%m-%d')"
+            git push
+          fi
