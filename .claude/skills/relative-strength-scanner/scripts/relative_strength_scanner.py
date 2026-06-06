@@ -387,48 +387,67 @@ def format_telegram_message(
     new_outperformers: list[dict],
     lost_outperformers: list[str],
     scan_date: str
-) -> str:
-    """Format the alert message for Telegram with both new and dropped stocks."""
-    msg = f"<b>📊 RS Scanner Update</b> ({scan_date})\n"
-    msg += "=" * 40 + "\n\n"
+) -> list[str]:
+    """Format the alert message for Telegram with both new and dropped stocks.
+
+    Returns a list of messages (split if needed to respect Telegram's 4096 char limit).
+    """
+    messages = []
+
+    # Header message
+    header = f"<b>📊 RS Scanner Update</b> ({scan_date})\n"
+    header += "=" * 40 + "\n\n"
 
     # New outperformers section
     if new_outperformers:
-        msg += f"<b>✅ NEW OUTPERFORMERS ({len(new_outperformers)})</b>\n"
+        msg = header + f"<b>✅ NEW OUTPERFORMERS ({len(new_outperformers)})</b>\n"
         msg += f"<i>Stocks newly beating Nifty in BOTH periods</i>\n\n"
 
-        for i, stock in enumerate(new_outperformers[:15], 1):
+        current_msg = msg
+        for i, stock in enumerate(new_outperformers, 1):
             rs_101_pct = stock["rs_value_101"] * 100
             rs_123_pct = stock["rs_value_123"] * 100
-            msg += (
+            line = (
                 f"{i}. <b>{stock['symbol']}</b> "
                 f"| 101d: {rs_101_pct:+.1f}% "
                 f"| 123d: {rs_123_pct:+.1f}%\n"
             )
 
-        if len(new_outperformers) > 15:
-            msg += f"<i>... and {len(new_outperformers) - 15} more</i>\n"
-    else:
-        msg += "<b>✅ NEW OUTPERFORMERS</b>\n"
-        msg += "<i>None</i>\n"
+            # Check if adding this line would exceed Telegram's limit
+            if len(current_msg + line) > 4000:  # Leave some margin
+                messages.append(current_msg)
+                current_msg = f"<b>✅ NEW OUTPERFORMERS (continued)</b>\n\n" + line
+            else:
+                current_msg += line
 
-    msg += "\n" + "-" * 40 + "\n\n"
+        messages.append(current_msg)
+    else:
+        messages.append(header + "<b>✅ NEW OUTPERFORMERS</b>\n<i>None</i>\n")
 
     # Dropped outperformers section
     if lost_outperformers:
+        msg = f"\n{'-' * 40}\n\n"
         msg += f"<b>⚠️ DROPPED FROM OUTPERFORM ({len(lost_outperformers)})</b>\n"
         msg += f"<i>No longer beating Nifty in both periods</i>\n\n"
 
-        for i, symbol in enumerate(lost_outperformers[:15], 1):
-            msg += f"{i}. {symbol}\n"
+        current_msg = msg
+        for i, symbol in enumerate(lost_outperformers, 1):
+            line = f"{i}. {symbol}\n"
 
-        if len(lost_outperformers) > 15:
-            msg += f"<i>... and {len(lost_outperformers) - 15} more</i>\n"
+            # Check if adding this line would exceed limit
+            if len(current_msg + line) > 4000:
+                messages.append(current_msg)
+                current_msg = f"<b>⚠️ DROPPED FROM OUTPERFORM (continued)</b>\n\n" + line
+            else:
+                current_msg += line
+
+        messages.append(current_msg)
     else:
-        msg += "<b>⚠️ DROPPED FROM OUTPERFORM</b>\n"
-        msg += "<i>None</i>\n"
+        msg = f"\n{'-' * 40}\n\n"
+        msg += "<b>⚠️ DROPPED FROM OUTPERFORM</b>\n<i>None</i>\n"
+        messages.append(msg)
 
-    return msg
+    return messages
 
 
 def check_and_alert(results: list[dict], bot_token: str = None, chat_id: str = None):
@@ -495,12 +514,24 @@ def check_and_alert(results: list[dict], bot_token: str = None, chat_id: str = N
 
     if bot_token and chat_id:
         # Send alert if there are new outperformers, dropped stocks, or neither (just status update)
-        message = format_telegram_message(new_outperformers, list(lost_symbols), scan_date)
-        print(f"\n  Sending Telegram alert...")
-        if send_telegram_alert(message, bot_token, chat_id):
-            print("  Telegram alert sent!")
+        messages = format_telegram_message(new_outperformers, list(lost_symbols), scan_date)
+        print(f"\n  Sending Telegram alert ({len(messages)} message(s))...")
+
+        success_count = 0
+        for i, message in enumerate(messages, 1):
+            if send_telegram_alert(message, bot_token, chat_id):
+                success_count += 1
+                print(f"  Message {i}/{len(messages)} sent!")
+                # Small delay between messages to avoid rate limiting
+                if i < len(messages):
+                    time.sleep(1)
+            else:
+                print(f"  Failed to send message {i}/{len(messages)}.")
+
+        if success_count == len(messages):
+            print(f"  All {len(messages)} Telegram message(s) sent successfully!")
         else:
-            print("  Failed to send Telegram alert.")
+            print(f"  Sent {success_count}/{len(messages)} messages.")
     else:
         print("\n  Telegram not configured. Run with --setup-telegram to configure.")
 
